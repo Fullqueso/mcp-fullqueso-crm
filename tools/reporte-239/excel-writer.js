@@ -298,10 +298,11 @@ function expandCounterRows(c, rate) {
     });
   }
 
-  // Efectivo Bs row
+  // Efectivo Bs row (subtract opening Bs balance from conteo)
   if (c.ves.sistema > 0 || c.ves.conteo > 0) {
     const sistemaUsd = rate > 0 ? round2(c.ves.sistema / rate) : 0;
-    const conteoUsd = rate > 0 ? round2(c.ves.conteo / rate) : 0;
+    const adjustedVesConteo = round2(c.ves.conteo - c.efectivoBs);
+    const conteoUsd = rate > 0 ? round2(adjustedVesConteo / rate) : 0;
     rows.push({
       operador: opCode,
       nombre: opName,
@@ -309,14 +310,15 @@ function expandCounterRows(c, rate) {
       tipo: 'Efectivo Bs',
       sistemaBs: c.ves.sistema,
       sistemaUsd,
-      conteoBs: c.ves.conteo,
+      conteoBs: adjustedVesConteo,
       conteoUsd,
       diffUsd: round2(conteoUsd - sistemaUsd),
     });
   }
 
-  // Efectivo $ row
+  // Efectivo $ row (subtract opening USD balance from conteo)
   if (c.usd.sistema > 0 || c.usd.conteo > 0) {
+    const adjustedUsdConteo = round2(c.usd.conteo - c.efectivoUsd);
     rows.push({
       operador: opCode,
       nombre: opName,
@@ -325,8 +327,8 @@ function expandCounterRows(c, rate) {
       sistemaBs: 0,
       sistemaUsd: c.usd.sistema,
       conteoBs: 0,
-      conteoUsd: c.usd.conteo,
-      diffUsd: round2(c.usd.conteo - c.usd.sistema),
+      conteoUsd: adjustedUsdConteo,
+      diffUsd: round2(adjustedUsdConteo - c.usd.sistema),
     });
   }
 

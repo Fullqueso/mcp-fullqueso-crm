@@ -162,8 +162,8 @@ export function calculateTotals(aggregated, storeCode, bcv) {
 
   for (const entry of aggregated) {
     const dollar = isDollarMethod(entry.metodo);
-    const netosiniva = dollar ? 0 : round2(entry.bs / 1.16);
-    const iva = dollar ? 0 : round2(entry.bs - netosiniva);
+    const netosiniva = round2(entry.bs / 1.16);
+    const iva = round2(entry.bs - netosiniva);
     const igtf = (entry.doc === 'FAV' && dollar && igtfAgent)
       ? round2(entry.usd * 0.03 * bcv)
       : 0;

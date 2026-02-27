@@ -55,7 +55,7 @@ Example user requests and which tool to call:
 - Cash USD net = `cash - cashVuelto`
 - IVA = 16%, IGTF = 3% (FAV + dollar methods only, FQ28 exempt)
 - Exclude `doc === "BC"` orders
-- Dollar methods (Efectivo $, Zelle): netosiniva=0, iva=0
+- Dollar methods (Efectivo $, Zelle): netosiniva/iva calculated from Bs equivalent (same as other methods)
 
 ## API
 - Base: `https://crm-server-main.fullqueso.com/api/v2/report`
