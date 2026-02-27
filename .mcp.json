@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "fullqueso-crm": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/fpmacbookm1/Documents/FullQuesoMCP-Main/mcp-fullqueso-crm/server.js"
+      ],
+      "env": {
+        "CRM_BASE_URL": "https://crm-server-main.fullqueso.com/api/v2/report"
+      }
+    }
+  }
+}

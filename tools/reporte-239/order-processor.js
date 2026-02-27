@@ -113,12 +113,14 @@ export function aggregate(lines) {
         metodo: l.metodo,
         bs: 0,
         usd: 0,
+        qty: 0,
         isDollar: l.isDollar,
       });
     }
     const entry = map.get(key);
     entry.bs = round2(entry.bs + l.bs);
     entry.usd = round2(entry.usd + l.usd);
+    entry.qty += 1;
   }
 
   return Array.from(map.values());
@@ -170,6 +172,7 @@ export function calculateTotals(aggregated, storeCode, bcv) {
       metodo: entry.metodo,
       bs: entry.bs,
       usd: entry.usd,
+      qty: entry.qty,
       netosiniva,
       iva,
       igtf,

@@ -185,8 +185,11 @@ export async function handleReconcile239(args) {
   const results = [];
 
   for (const sc of storeCodes) {
-    const report = await processOrdersForStore(client, date, sc);
-    const counterResult = await processCountersForStore(client, date, sc);
+    // Parallel fetch: orders + counters at the same time
+    const [report, counterResult] = await Promise.all([
+      processOrdersForStore(client, date, sc),
+      processCountersForStore(client, date, sc),
+    ]);
     const reconcileResult = reconcile(report, counterResult);
 
     results.push({
@@ -207,8 +210,11 @@ export async function handleFullReport239(args) {
   const results = [];
 
   for (const sc of storeCodes) {
-    const report = await processOrdersForStore(client, date, sc);
-    const counterResult = await processCountersForStore(client, date, sc);
+    // Parallel fetch: orders + counters at the same time
+    const [report, counterResult] = await Promise.all([
+      processOrdersForStore(client, date, sc),
+      processCountersForStore(client, date, sc),
+    ]);
     const reconcileResult = reconcile(report, counterResult);
 
     const filepath = await generateExcel({

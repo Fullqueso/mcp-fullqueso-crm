@@ -135,7 +135,7 @@ GET /counters-by-day?date=YYYY-MM-DD&shopCode=FQ01
 |-------|------|----------|---------|-------------|
 | date | string | yes | — | Date in YYYY-MM-DD format |
 | stores | string[] | no | ["all"] | Store codes: FQ01, FQ28, FQ88, or ["all"] |
-| format | enum | no | "excel" | Output: "excel" (file) or "summary" (JSON) |
+| format | enum | no | "summary" | Output: "excel" (file) or "summary" (JSON) |
 
 **Processing Logic:**
 
@@ -306,33 +306,38 @@ Returns path to generated Excel file, plus the summary JSON above.
 | output_dir | string | no | ~/Downloads | Where to save Excel |
 
 **Processing Logic:**
-1. Run generate_239 + get_counters + reconcile_239
-2. Generate Excel workbook with 3 sheets:
+1. Parallel fetch: orders + counters via `Promise.all`
+2. Process orders → reconcile → generate Excel workbook with 3 sheets
 
-**Sheet 1 "Ordenes Activas":**
-- Row 1: Fecha, Tienda, Tasa BCV (info header)
-- Row 2: Column headers (dark red #CC0000 background, white text)
-- FAV section: CODCAJA=CAJA1, each method, Total CAJA1, Total FAV (red #FF0000)
-- NEN section: CODCAJA=NEN, each method, Total NEN (red)
-- Grand total: FAV+NEN (red)
-- Verification: NETOCIVA/BCV vs NETOCIVAUSD vs Diff
+**Sheet 1 "Ordenes Activas"** (8 columns):
+- Row 1: Fecha (merged A1:B1), date, Tienda, store, BCV, rate, Ordenes: N
+- Row 2: Headers — CODCAJA, METODO_PAGO, Suma NETOCIVA Bs, Suma NETOCIVAUSD, Qty, NETOSINIVA, IVA, IGTF (3%)
+- FAV section: CODCAJA=CAJA1, each method row, "Total FAV" (red #FF0000)
+- NEN section: CODCAJA=NEN, each method row, "Total NEN" (red)
+- Blank row + "TOTAL (FAV+NEN)" (red)
+- Dollar methods: blue italic entire row, IGTF shows "-" when not applicable
+- Freeze: ySplit=2
 
-**Sheet 2 "Cajas":**
-- Per operator: name, terminal, punto sistema/conteo/diff, movil, zelle, efectivo, totals
-- Grand total row
+**Sheet 2 "Cajas"** (9 columns):
+- Row 1: Title merged A1:H1 "Cajas - {store} - {date}"
+- Row 3: Headers — Operador, Nombre, Terminal, Tipo, Sistema Bs, Sistema USD, Conteo Bs, Conteo USD, Diferencia USD
+- Each operator expanded into rows per payment type (Punto, Efectivo Bs, Efectivo $, Pago Movil, Zelle)
+- "TOTAL CAJAS" row with yellow background (#FFF2CC)
+- Separate "DETALLE DE LOTES" section with blue headers (#4472C4): Operador, Terminal, Lote, Monto Bs, Monto USD
+- Diferencia USD = conteo - sistema
+- Freeze: ySplit=3
 
-**Sheet 3 "Reconciliación":**
-- Per payment type: Ordenes Activas USD, Cajas USD, Diff, Status
-- Total row with overall diff and percentage
+**Sheet 3 "Reconciliación"** (6 columns):
+- Row 1: Title merged A1:F1 "RECONCILIACIÓN ORDENES ACTIVAS vs CAJAS — {store} — {date}" (bold red text)
+- Row 3: Headers — Forma de Pago, Ordenes Activas USD, Cajas (Sistema) USD, Diferencia USD, Diferencia %, Status
+- Data rows with green background (#E2EFDA)
+- "TOTAL" row with yellow background (#FFF2CC)
+- NOTAS section with merged cells explaining OA, Cajas, diferencia, and BCV rate used
 
-**Excel formatting:**
-- Column headers: white on dark red (#CC0000), centered, wrap text
-- Total FAV/NEN/Grand: white bold on red (#FF0000)
-- Dollar method VES values: blue italic (#0000CC)
-- VES format: #,##0.00
-- USD format: $#,##0.00
-- Freeze panes: row 3
-- Column widths: [12, 38, 18, 14, 18, 16, 20, 14, 14, 12, 16]
+**Common formatting:**
+- Column headers: white bold on dark red (#CC0000), centered
+- VES format: #,##0.00 | USD format: $#,##0.00
+- Column widths: Sheet1=[12,35,18,18,8,18,16,14] | Sheet2=[18,14,12,16,16,16,16,16,16] | Sheet3=[22,22,22,22,14,12]
 
 **Output:** Excel file path + summary JSON.
 
