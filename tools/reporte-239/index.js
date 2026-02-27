@@ -190,7 +190,7 @@ export async function handleReconcile239(args) {
       processOrdersForStore(client, date, sc),
       processCountersForStore(client, date, sc),
     ]);
-    const reconcileResult = reconcile(report, counterResult);
+    const reconcileResult = reconcile(report, counterResult, report.bcv);
 
     results.push({
       date,
@@ -215,7 +215,7 @@ export async function handleFullReport239(args) {
       processOrdersForStore(client, date, sc),
       processCountersForStore(client, date, sc),
     ]);
-    const reconcileResult = reconcile(report, counterResult);
+    const reconcileResult = reconcile(report, counterResult, report.bcv);
 
     const filepath = await generateExcel({
       reportData: report,
@@ -239,7 +239,13 @@ export async function handleFullReport239(args) {
         orderCount: report.orderCount,
         totals: report.totals,
         verification: report.verification,
-        reconciliation: reconcileResult.totals,
+        reconciliation: {
+          sistemaUsd: reconcileResult.total.sistemaUsd,
+          conteoUsd: reconcileResult.total.conteoUsd,
+          roundingAdj: reconcileResult.roundingAdj,
+          roundingPct: `${reconcileResult.roundingPct.toFixed(2)}%`,
+          warning: reconcileResult.warning,
+        },
       },
     });
   }

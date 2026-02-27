@@ -395,69 +395,73 @@ function applyDataFormats(ws, startRow) {
 function writeReconciliacionSheet(wb, { reconcileData, date, storeCode, storeName, bcv }) {
   const ws = wb.addWorksheet('Reconciliación');
 
-  // Column widths (6 cols)
-  const widths = [22, 22, 22, 22, 14, 12];
+  // Column widths (7 cols)
+  const widths = [12, 20, 18, 18, 18, 18, 18];
   widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
   // Row 1: Title merged
-  const title = `RECONCILIACIÓN ORDENES ACTIVAS vs CAJAS — ${storeCode} — ${date}`;
+  const title = `RECONCILIACIÓN SISTEMA vs CONTEO — ${storeCode} — ${date}`;
   const titleRow = ws.addRow([title]);
-  ws.mergeCells('A1:F1');
+  ws.mergeCells('A1:G1');
   titleRow.getCell(1).font = { bold: true, color: DARK_RED, size: 10 };
 
   // Row 2: empty
   ws.addRow([]);
 
   // Row 3: Headers
-  const headers = ['Forma de Pago', 'Ordenes Activas USD', 'Cajas (Sistema) USD', 'Diferencia USD', 'Diferencia %', 'Status'];
+  const headers = ['CODCAJA', 'Forma de Pago', 'Sistema Bs', 'Sistema USD', 'Conteo Bs', 'Conteo USD', 'Diferencia USD'];
   const headerRow = ws.addRow(headers);
   headerRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
-    if (colNum <= 6) {
+    if (colNum <= 7) {
       cell.fill = HEADER_FILL;
       cell.font = HEADER_FONT;
-      cell.alignment = { horizontal: 'center' };
+      cell.alignment = { horizontal: 'center', wrapText: true };
     }
   });
 
   // Freeze after row 3
   ws.views = [{ state: 'frozen', ySplit: 3 }];
 
-  // Data rows with green background
-  for (const c of reconcileData.comparison) {
-    const pct = c.ordenesUsd > 0
-      ? `${round2((Math.abs(c.diff) / c.ordenesUsd) * 100).toFixed(2)}%`
-      : '0.00%';
-    const status = Math.abs(c.diff) <= 1 ? '✅' : '⚠️';
-
-    const row = ws.addRow([c.method, c.ordenesUsd, c.cajasUsd, c.diff, pct, status]);
-    for (let col = 1; col <= 6; col++) {
-      const cell = row.getCell(col);
-      cell.fill = GREEN_FILL;
-      cell.alignment = { horizontal: col <= 1 ? 'left' : 'right' };
-    }
-    // USD formats
-    [2, 3, 4].forEach(col => {
-      row.getCell(col).numFmt = USD_FORMAT;
-    });
+  // FAV section
+  for (const r of reconcileData.fav) {
+    writeReconcileRow(ws, 'FAV', r);
   }
+  // Total FAV
+  writeReconcileTotalRow(ws, 'Total FAV', reconcileData.totalFav);
+
+  // NEN section
+  for (const r of reconcileData.nen) {
+    writeReconcileRow(ws, 'NEN', r);
+  }
+  // Total NEN
+  writeReconcileTotalRow(ws, 'Total NEN', reconcileData.totalNen);
 
   // Empty row
   ws.addRow([]);
 
-  // Total row (yellow)
-  const t = reconcileData.totals;
-  const totalRow = ws.addRow([
-    'TOTAL', t.ordenesUsd, t.cajasUsd, t.diff, t.pctDiff, t.status,
+  // TOTAL row (yellow)
+  const t = reconcileData.total;
+  const grandRow = ws.addRow([
+    'TOTAL', '', t.sistemaBs, t.sistemaUsd, t.conteoBs, t.conteoUsd, t.diffUsd,
   ]);
-  for (let col = 1; col <= 6; col++) {
-    const cell = totalRow.getCell(col);
+  for (let col = 1; col <= 7; col++) {
+    const cell = grandRow.getCell(col);
     cell.fill = YELLOW_FILL;
     cell.font = BOLD_FONT;
-    cell.alignment = { horizontal: col <= 1 ? 'left' : 'right' };
+    cell.alignment = { horizontal: col <= 2 ? 'left' : 'right' };
   }
-  [2, 3, 4].forEach(col => {
-    totalRow.getCell(col).numFmt = USD_FORMAT;
-  });
+  applyReconcileFormats(grandRow);
+
+  // Rounding Adjustment row
+  const adjRow = ws.addRow([
+    'Ajuste Redondeo', '', '', '', '', reconcileData.roundingAdj, '',
+  ]);
+  for (let col = 1; col <= 7; col++) {
+    const cell = adjRow.getCell(col);
+    cell.font = { bold: true, italic: true, size: 10 };
+    cell.alignment = { horizontal: col <= 2 ? 'left' : 'right' };
+  }
+  adjRow.getCell(6).numFmt = USD_FORMAT;
 
   // Empty row
   ws.addRow([]);
@@ -466,19 +470,129 @@ function writeReconciliacionSheet(wb, { reconcileData, date, storeCode, storeNam
   const notasRow = ws.addRow(['NOTAS:']);
   notasRow.font = BOLD_FONT;
 
-  const notes = [
-    '• Ordenes Activas = suma de pagos registrados en cada orden individual del POS',
-    '• Cajas (Sistema) = totales reportados por cada operador al cierre de caja',
-    '• Diferencia positiva = Ordenes reporta MÁS que Cajas',
-    `• Tasa BCV usada: ${bcv}`,
-  ];
+  const notes = [];
+
+  // General rules
+  notes.push('REGLAS DE RECONCILIACIÓN:');
+  notes.push('• FAV Punto: conteo real por terminal desde lotes de Cajas');
+  notes.push('• FAV otros métodos: conteo = sistema');
+  notes.push('• NEN absorbe todas las diferencias de conteo');
+  notes.push(`• Tasa BCV usada: ${bcv}`);
+  notes.push('');
+
+  // Detail FAV adjustments
+  const favAdj = reconcileData.fav.filter(r => r.diffUsd !== 0);
+  if (favAdj.length > 0) {
+    notes.push('AJUSTES FAV:');
+    for (const r of favAdj) {
+      const sign = r.diffUsd > 0 ? '+' : '';
+      notes.push(`• ${r.metodo}: conteo ${sign}$${r.diffUsd.toFixed(2)} (Bs ${sign}${round2(r.conteoBs - r.sistemaBs).toFixed(2)}) vs sistema`);
+    }
+    if (reconcileData.puntoShortfallUsd > 0) {
+      notes.push(`  → Déficit Punto total: $${reconcileData.puntoShortfallUsd.toFixed(2)} (Bs ${reconcileData.puntoShortfallBs.toFixed(2)}) absorbido en Efectivo Bs Tienda FAV`);
+    }
+    notes.push(`• Total FAV Diferencia: $${reconcileData.totalFav.diffUsd.toFixed(2)}`);
+    notes.push('');
+  }
+
+  // Detail NEN adjustments
+  const nenAdj = reconcileData.nen.filter(r => r.diffUsd !== 0);
+  if (nenAdj.length > 0) {
+    notes.push('AJUSTES NEN:');
+    for (const r of nenAdj) {
+      const sign = r.diffUsd > 0 ? '+' : '';
+      notes.push(`• ${r.metodo}: conteo ${sign}$${r.diffUsd.toFixed(2)} (Bs ${sign}${round2(r.conteoBs - r.sistemaBs).toFixed(2)}) vs sistema`);
+    }
+    notes.push(`• Total NEN Diferencia: $${reconcileData.totalNen.diffUsd.toFixed(2)}`);
+    notes.push('');
+  }
+
+  // Rounding
+  notes.push(`AJUSTE REDONDEO: $${reconcileData.roundingAdj.toFixed(2)} (${reconcileData.roundingPct.toFixed(2)}%)`);
+  notes.push('');
+
+  // Verification: Efectivo Bs/$ reconciliation totals vs Cajas adjusted conteo
+  if (reconcileData.cajasConteoByType) {
+    const allRows = [...reconcileData.fav, ...reconcileData.nen];
+
+    const checks = [
+      { label: 'Efectivo Bs', metodo: 'Efectivo Bs Tienda', type: 'Efectivo Bs' },
+      { label: 'Efectivo $', metodo: 'Efectivo $ Tienda', type: 'Efectivo $' },
+      { label: 'Pago Movil', metodo: 'Pago Movil Tienda Venezuela 5187', type: 'Pago Movil' },
+      { label: 'Zelle', metodo: 'Zelle', type: 'Zelle' },
+    ];
+
+    notes.push('VERIFICACIÓN CONTEO vs CAJAS:');
+    for (const chk of checks) {
+      const reconUsd = round2(allRows
+        .filter(r => r.metodo === chk.metodo)
+        .reduce((sum, r) => sum + r.conteoUsd, 0));
+      const cajasUsd = reconcileData.cajasConteoByType[chk.type]?.usd || 0;
+      const diff = round2(reconUsd - cajasUsd);
+      const status = Math.abs(diff) <= 0.01 ? '✅' : `❌ diff $${diff.toFixed(2)}`;
+      notes.push(`• ${chk.label}: Recon $${reconUsd.toFixed(2)} vs Cajas $${cajasUsd.toFixed(2)} ${status}`);
+    }
+
+    // Punto verification (sum all Punto terminals)
+    const reconPuntoUsd = round2(allRows
+      .filter(r => !['Efectivo Bs Tienda', 'Efectivo $ Tienda', 'Pago Movil Tienda Venezuela 5187', 'Zelle'].includes(r.metodo))
+      .reduce((sum, r) => sum + r.conteoUsd, 0));
+    const cajasPuntoUsd = reconcileData.cajasConteoByType['Punto']?.usd || 0;
+    const puntoDiff = round2(reconPuntoUsd - cajasPuntoUsd);
+    const puntoStatus = Math.abs(puntoDiff) <= 0.01 ? '✅' : `❌ diff $${puntoDiff.toFixed(2)}`;
+    notes.push(`• Punto (todos): Recon $${reconPuntoUsd.toFixed(2)} vs Cajas $${cajasPuntoUsd.toFixed(2)} ${puntoStatus}`);
+    notes.push('');
+  }
+
+  if (reconcileData.warning) {
+    notes.push('⚠️ ALERTA: Ajuste de redondeo supera 1% — revisar conteo');
+  }
 
   for (const note of notes) {
+    if (note === '') {
+      ws.addRow([]);
+      continue;
+    }
     const noteRow = ws.addRow([note]);
     const rowNum = noteRow.number;
-    // Merge note across all columns (except last note which is short)
-    if (note !== notes[notes.length - 1]) {
-      ws.mergeCells(`A${rowNum}:F${rowNum}`);
+    ws.mergeCells(`A${rowNum}:G${rowNum}`);
+    if (note.startsWith('⚠️')) {
+      noteRow.getCell(1).font = { bold: true, color: RED, size: 10 };
+    } else if (!note.startsWith('•') && note.endsWith(':')) {
+      noteRow.getCell(1).font = BOLD_FONT;
     }
   }
+}
+
+function writeReconcileRow(ws, codcaja, r) {
+  const row = ws.addRow([
+    codcaja, r.metodo, r.sistemaBs, r.sistemaUsd, r.conteoBs, r.conteoUsd, r.diffUsd,
+  ]);
+  for (let col = 1; col <= 7; col++) {
+    const cell = row.getCell(col);
+    cell.fill = GREEN_FILL;
+    cell.alignment = { horizontal: col <= 2 ? 'left' : 'right' };
+    if (r.isDollar) {
+      cell.font = DOLLAR_FONT;
+    }
+  }
+  applyReconcileFormats(row);
+}
+
+function writeReconcileTotalRow(ws, label, totals) {
+  const row = ws.addRow([
+    label, '', totals.sistemaBs, totals.sistemaUsd, totals.conteoBs, totals.conteoUsd, totals.diffUsd,
+  ]);
+  applyTotalStyle(row, 7);
+  applyReconcileFormats(row);
+}
+
+function applyReconcileFormats(row) {
+  // Cols 3,5 = Bs format; Cols 4,6,7 = USD format
+  [3, 5].forEach(col => {
+    if (typeof row.getCell(col).value === 'number') row.getCell(col).numFmt = BS_FORMAT;
+  });
+  [4, 6, 7].forEach(col => {
+    if (typeof row.getCell(col).value === 'number') row.getCell(col).numFmt = USD_FORMAT;
+  });
 }
