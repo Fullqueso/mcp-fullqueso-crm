@@ -1,0 +1,59 @@
+{
+  "name": "@fullqueso/mcp-fullqueso-crm",
+  "version": "1.0.0",
+  "description": "MCP server for Full Queso CRM/POS — Reporte 239 daily sales reconciliation by payment method with IGTF/IVA, counter closings, and cross-reference auditing",
+  "main": "server.js",
+  "bin": {
+    "mcp-fullqueso-crm": "server.js"
+  },
+  "type": "module",
+  "files": [
+    "server.js",
+    "lib/",
+    "config/",
+    "tools/",
+    "utils/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "crm",
+    "pos",
+    "reporte-239",
+    "sales-reconciliation",
+    "igtf",
+    "iva",
+    "fullqueso"
+  ],
+  "author": "Francisco Padilla <fullquesofranquicia@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fullqueso/mcp-fullqueso-crm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Fullqueso/mcp-fullqueso-crm/issues"
+  },
+  "homepage": "https://github.com/Fullqueso/mcp-fullqueso-crm#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "dotenv": "^16.4.0",
+    "node-fetch": "^3.3.0",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
