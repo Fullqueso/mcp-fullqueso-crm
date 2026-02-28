@@ -14,29 +14,8 @@ function mapMethodToType(metodo) {
 }
 
 /**
- * Aggregate OA methods into payment types, separately for FAV and NEN.
- */
-function aggregateOAByType(reportData) {
-  const result = { fav: {}, nen: {} };
-  for (const type of PAYMENT_TYPES) {
-    result.fav[type] = { bs: 0, usd: 0 };
-    result.nen[type] = { bs: 0, usd: 0 };
-  }
-  for (const m of reportData.fav.methods) {
-    const type = mapMethodToType(m.metodo);
-    result.fav[type].bs = round2(result.fav[type].bs + m.bs);
-    result.fav[type].usd = round2(result.fav[type].usd + m.usd);
-  }
-  for (const m of reportData.nen.methods) {
-    const type = mapMethodToType(m.metodo);
-    result.nen[type].bs = round2(result.nen[type].bs + m.bs);
-    result.nen[type].usd = round2(result.nen[type].usd + m.usd);
-  }
-  return result;
-}
-
-/**
  * Aggregate Cajas conteo by payment type (with opening balance adjustment).
+ * If counters array is provided, only those counters are used.
  */
 function aggregateConteoByType(counterData) {
   const rate = counterData.rate || 0;
@@ -68,11 +47,11 @@ function aggregateConteoByType(counterData) {
 
 /**
  * Build per-terminal Punto conteo from Cajas lote data.
- * Sums lote monto (Bs) across all operators for each terminal.
+ * Sums lote monto (Bs) across operators for each terminal.
  */
-function buildPuntoConteoByTerminal(counterData, rate) {
+function buildPuntoConteoByTerminal(counters, rate) {
   const map = {};
-  for (const c of counterData.counters) {
+  for (const c of counters) {
     for (const l of c.lotes) {
       if (!l.monto || l.monto === 0) continue;
       const key = titleCase(l.terminal);
@@ -87,26 +66,97 @@ function buildPuntoConteoByTerminal(counterData, rate) {
 }
 
 /**
- * Reconcile Sistema vs Conteo with FAV/NEN allocation.
- * Uses individual methods (same detail as Ordenes Activas).
+ * Build FAV reconciliation rows for a single caja.
+ * Returns { rows, total, puntoShortfallUsd, puntoShortfallBs }.
+ */
+function buildCajaFavRows(cajaMethods, cajaPuntoConteo, terminalSistema, favMergedMethods) {
+  const rows = [];
+  const total = { sistemaBs: 0, sistemaUsd: 0, conteoBs: 0, conteoUsd: 0, diffUsd: 0 };
+
+  let cajaPuntoConteoBs = 0;
+  let cajaPuntoConteoUsd = 0;
+  let cajaPuntoSisBs = 0;
+  let cajaPuntoSisUsd = 0;
+
+  for (const m of cajaMethods) {
+    const type = mapMethodToType(m.metodo);
+    let conteoBs, conteoUsd;
+
+    if (type === 'Punto') {
+      const tc = cajaPuntoConteo[m.metodo] || { bs: 0, usd: 0 };
+      const ts = terminalSistema[m.metodo] || { bs: 0, usd: 0 };
+      // hasNEN: total sistema for terminal > total FAV sistema for terminal
+      const favMerged = favMergedMethods.find(fm => fm.metodo === m.metodo);
+      const totalFavSis = favMerged ? favMerged.usd : 0;
+      const hasNEN = round2(ts.usd - totalFavSis) > 0;
+
+      if (hasNEN) {
+        conteoBs = m.bs;
+        conteoUsd = m.usd;
+      } else {
+        // FAV-only terminal: use actual POS conteo for this caja
+        conteoUsd = tc.usd;
+        conteoBs = tc.bs;
+      }
+      cajaPuntoConteoUsd = round2(cajaPuntoConteoUsd + conteoUsd);
+      cajaPuntoConteoBs = round2(cajaPuntoConteoBs + conteoBs);
+      cajaPuntoSisUsd = round2(cajaPuntoSisUsd + m.usd);
+      cajaPuntoSisBs = round2(cajaPuntoSisBs + m.bs);
+    } else {
+      conteoBs = m.bs;
+      conteoUsd = m.usd;
+    }
+
+    rows.push({
+      metodo: m.metodo,
+      sistemaBs: m.bs,
+      sistemaUsd: m.usd,
+      conteoBs,
+      conteoUsd,
+      diffUsd: 0,
+      isDollar: m.isDollar,
+    });
+  }
+
+  // Per-caja Punto shortfall
+  const puntoShortfallUsd = round2(cajaPuntoSisUsd - cajaPuntoConteoUsd);
+  const puntoShortfallBs = round2(cajaPuntoSisBs - cajaPuntoConteoBs);
+
+  // Apply shortfall to Efectivo Bs and finalize diffs
+  for (const r of rows) {
+    const type = mapMethodToType(r.metodo);
+    if (type === 'Efectivo Bs' && puntoShortfallUsd > 0) {
+      r.conteoUsd = round2(r.sistemaUsd + puntoShortfallUsd);
+      r.conteoBs = round2(r.sistemaBs + puntoShortfallBs);
+    }
+    r.diffUsd = round2(r.conteoUsd - r.sistemaUsd);
+
+    total.sistemaBs = round2(total.sistemaBs + r.sistemaBs);
+    total.sistemaUsd = round2(total.sistemaUsd + r.sistemaUsd);
+    total.conteoBs = round2(total.conteoBs + r.conteoBs);
+    total.conteoUsd = round2(total.conteoUsd + r.conteoUsd);
+    total.diffUsd = round2(total.diffUsd + r.diffUsd);
+  }
+
+  return {
+    rows,
+    total,
+    puntoShortfallUsd: puntoShortfallUsd > 0 ? puntoShortfallUsd : 0,
+    puntoShortfallBs: puntoShortfallBs > 0 ? puntoShortfallBs : 0,
+  };
+}
+
+/**
+ * Reconcile Sistema vs Conteo with per-caja FAV breakdown.
  *
- * FAV Punto (FAV-only terminal): actual conteo from Cajas lotes.
- * FAV Punto (shared with NEN): conteo = sistema (unchanged).
- * FAV Efectivo Bs: absorbs Punto shortfall from FAV-only terminals.
- * FAV others: conteo = sistema.
- * NEN Punto: terminal conteo minus FAV sistema for that terminal.
- * NEN others: proportional distribution within each type.
+ * FAV: per-caja sections, each with its own Punto conteo and shortfall.
+ * NEN: consolidated across all cajas.
  */
 export function reconcile(reportData, counterData, bcv) {
-  const oa = aggregateOAByType(reportData);
   const conteo = aggregateConteoByType(counterData);
   const rate = counterData.rate || bcv;
 
-  // --- Per-terminal Punto conteo from Cajas lotes ---
-
-  const puntoConteo = buildPuntoConteoByTerminal(counterData, rate);
-
-  // Build per-terminal sistema totals (FAV + NEN combined)
+  // Per-terminal sistema totals (FAV + NEN combined)
   const terminalSistema = {};
   const allPuntoMethods = [
     ...reportData.fav.methods.filter(m => mapMethodToType(m.metodo) === 'Punto'),
@@ -118,99 +168,86 @@ export function reconcile(reportData, counterData, bcv) {
     terminalSistema[m.metodo].usd = round2(terminalSistema[m.metodo].usd + m.usd);
   }
 
-  // --- Build FAV rows ---
+  // --- Build FAV rows per caja ---
 
-  const favRows = [];
+  const cajaNames = Object.keys(reportData.fav.cajas || {}).sort();
+  const favCajas = {};
   const totalFav = { sistemaBs: 0, sistemaUsd: 0, conteoBs: 0, conteoUsd: 0, diffUsd: 0 };
 
-  let favPuntoConteoBs = 0;
-  let favPuntoConteoUsd = 0;
+  for (const cajaName of cajaNames) {
+    const cajaOA = reportData.fav.cajas[cajaName];
+    // Filter counters for this caja
+    const cajaCounters = counterData.counters.filter(c => (c.caja || 'CAJA1') === cajaName);
+    const cajaPuntoConteo = buildPuntoConteoByTerminal(cajaCounters, rate);
 
+    const cajaResult = buildCajaFavRows(
+      cajaOA.methods,
+      cajaPuntoConteo,
+      terminalSistema,
+      reportData.fav.methods, // merged FAV methods for hasNEN check
+    );
+
+    favCajas[cajaName] = cajaResult;
+
+    totalFav.sistemaBs = round2(totalFav.sistemaBs + cajaResult.total.sistemaBs);
+    totalFav.sistemaUsd = round2(totalFav.sistemaUsd + cajaResult.total.sistemaUsd);
+    totalFav.conteoBs = round2(totalFav.conteoBs + cajaResult.total.conteoBs);
+    totalFav.conteoUsd = round2(totalFav.conteoUsd + cajaResult.total.conteoUsd);
+    totalFav.diffUsd = round2(totalFav.diffUsd + cajaResult.total.diffUsd);
+  }
+
+  // Flat fav array (all caja rows combined) for NOTAS verification
+  const favRows = [];
+  for (const cajaData of Object.values(favCajas)) {
+    favRows.push(...cajaData.rows);
+  }
+
+  // --- NEN allocation ---
+  // NEN conteo = total conteo − sum of all FAV cajas' conteo (per type)
+
+  // Compute total FAV conteo by type from per-caja data
+  const favConteoByType = {};
+  for (const type of PAYMENT_TYPES) {
+    favConteoByType[type] = { bs: 0, usd: 0 };
+  }
+  for (const cajaData of Object.values(favCajas)) {
+    for (const r of cajaData.rows) {
+      const type = mapMethodToType(r.metodo);
+      favConteoByType[type].bs = round2(favConteoByType[type].bs + r.conteoBs);
+      favConteoByType[type].usd = round2(favConteoByType[type].usd + r.conteoUsd);
+    }
+  }
+
+  // Compute total FAV sistema by type (from merged methods)
+  const favSistemaByType = {};
+  for (const type of PAYMENT_TYPES) {
+    favSistemaByType[type] = { bs: 0, usd: 0 };
+  }
   for (const m of reportData.fav.methods) {
     const type = mapMethodToType(m.metodo);
-    let conteoBs, conteoUsd;
-
-    if (type === 'Punto') {
-      const tc = puntoConteo[m.metodo] || { bs: 0, usd: 0 };
-      const ts = terminalSistema[m.metodo] || { bs: 0, usd: 0 };
-      const hasNEN = round2(ts.usd - m.usd) > 0;
-
-      if (hasNEN) {
-        // Terminal shared with NEN: FAV conteo = FAV sistema (unchanged)
-        conteoBs = m.bs;
-        conteoUsd = m.usd;
-      } else {
-        // FAV-only terminal: use actual conteo from Cajas lotes
-        conteoUsd = tc.usd;
-        conteoBs = tc.bs;
-      }
-      favPuntoConteoUsd = round2(favPuntoConteoUsd + conteoUsd);
-      favPuntoConteoBs = round2(favPuntoConteoBs + conteoBs);
-    } else {
-      // Non-Punto FAV: conteo = sistema (Efectivo Bs adjusted below)
-      conteoBs = m.bs;
-      conteoUsd = m.usd;
-    }
-
-    favRows.push({
-      metodo: m.metodo,
-      sistemaBs: m.bs,
-      sistemaUsd: m.usd,
-      conteoBs,
-      conteoUsd,
-      diffUsd: 0, // placeholder
-      isDollar: m.isDollar,
-    });
+    favSistemaByType[type].bs = round2(favSistemaByType[type].bs + m.bs);
+    favSistemaByType[type].usd = round2(favSistemaByType[type].usd + m.usd);
   }
-
-  // Compute Punto shortfall
-  const puntoShortfallUsd = round2(oa.fav['Punto'].usd - favPuntoConteoUsd);
-  const puntoShortfallBs = round2(oa.fav['Punto'].bs - favPuntoConteoBs);
-
-  // Second pass: apply Punto shortfall to Efectivo Bs and finalize diffs
-  for (const r of favRows) {
-    const type = mapMethodToType(r.metodo);
-    if (type === 'Efectivo Bs' && puntoShortfallUsd > 0) {
-      r.conteoUsd = round2(r.sistemaUsd + puntoShortfallUsd);
-      r.conteoBs = round2(r.sistemaBs + puntoShortfallBs);
-    }
-    r.diffUsd = round2(r.conteoUsd - r.sistemaUsd);
-
-    totalFav.sistemaBs = round2(totalFav.sistemaBs + r.sistemaBs);
-    totalFav.sistemaUsd = round2(totalFav.sistemaUsd + r.sistemaUsd);
-    totalFav.conteoBs = round2(totalFav.conteoBs + r.conteoBs);
-    totalFav.conteoUsd = round2(totalFav.conteoUsd + r.conteoUsd);
-    totalFav.diffUsd = round2(totalFav.diffUsd + r.diffUsd);
-  }
-
-  // --- Type-level NEN allocation (non-Punto types) ---
 
   const nenConteoByType = {};
-
-  // Standard types: NEN conteo = total conteo − FAV sistema
   for (const type of ['Pago Movil', 'Efectivo $', 'Zelle']) {
     nenConteoByType[type] = {
-      usd: round2(conteo[type].usd - oa.fav[type].usd),
-      bs: round2(conteo[type].bs - oa.fav[type].bs),
+      usd: round2(conteo[type].usd - favSistemaByType[type].usd),
+      bs: round2(conteo[type].bs - favSistemaByType[type].bs),
     };
   }
-
-  // Efectivo Bs: NEN conteo = total conteo − FAV conteo (which includes shortfall)
-  const favEfBsConteoUsd = round2(oa.fav['Efectivo Bs'].usd + (puntoShortfallUsd > 0 ? puntoShortfallUsd : 0));
-  const favEfBsConteoBs = round2(oa.fav['Efectivo Bs'].bs + (puntoShortfallBs > 0 ? puntoShortfallBs : 0));
+  // Efectivo Bs: NEN conteo = total conteo − total FAV conteo (includes shortfall)
   nenConteoByType['Efectivo Bs'] = {
-    usd: round2(conteo['Efectivo Bs'].usd - favEfBsConteoUsd),
-    bs: round2(conteo['Efectivo Bs'].bs - favEfBsConteoBs),
+    usd: round2(conteo['Efectivo Bs'].usd - favConteoByType['Efectivo Bs'].usd),
+    bs: round2(conteo['Efectivo Bs'].bs - favConteoByType['Efectivo Bs'].bs),
   };
 
   // --- Build NEN rows ---
 
   const nenRows = [];
   const totalNen = { sistemaBs: 0, sistemaUsd: 0, conteoBs: 0, conteoUsd: 0, diffUsd: 0 };
-
   const nenTypesWithRows = new Set();
 
-  // Group NEN methods by payment type
   const nenMethodsByType = {};
   for (const m of reportData.nen.methods) {
     const type = mapMethodToType(m.metodo);
@@ -219,7 +256,7 @@ export function reconcile(reportData, counterData, bcv) {
   }
 
   // NEN Punto: terminal conteo minus FAV sistema for that terminal
-  // Build FAV sistema per terminal for subtraction
+  const puntoConteo = buildPuntoConteoByTerminal(counterData.counters, rate);
   const favSistemaByTerminal = {};
   for (const m of reportData.fav.methods) {
     if (mapMethodToType(m.metodo) === 'Punto') {
@@ -233,25 +270,24 @@ export function reconcile(reportData, counterData, bcv) {
     for (const m of nenPuntoMethods) {
       const tc = puntoConteo[m.metodo] || { bs: 0, usd: 0 };
       const favSis = favSistemaByTerminal[m.metodo] || { bs: 0, usd: 0 };
-      // NEN conteo = terminal conteo − FAV sistema (NEN-only terminals: favSis = 0)
-      const conteoUsd = round2(tc.usd - favSis.usd);
-      const conteoBs = round2(tc.bs - favSis.bs);
-      const diffUsd = round2(conteoUsd - m.usd);
+      const cUsd = round2(tc.usd - favSis.usd);
+      const cBs = round2(tc.bs - favSis.bs);
+      const diffUsd = round2(cUsd - m.usd);
 
       nenRows.push({
         metodo: m.metodo,
         sistemaBs: m.bs,
         sistemaUsd: m.usd,
-        conteoBs,
-        conteoUsd,
+        conteoBs: cBs,
+        conteoUsd: cUsd,
         diffUsd,
         isDollar: m.isDollar,
       });
 
       totalNen.sistemaBs = round2(totalNen.sistemaBs + m.bs);
       totalNen.sistemaUsd = round2(totalNen.sistemaUsd + m.usd);
-      totalNen.conteoBs = round2(totalNen.conteoBs + conteoBs);
-      totalNen.conteoUsd = round2(totalNen.conteoUsd + conteoUsd);
+      totalNen.conteoBs = round2(totalNen.conteoBs + cBs);
+      totalNen.conteoUsd = round2(totalNen.conteoUsd + cUsd);
       totalNen.diffUsd = round2(totalNen.diffUsd + diffUsd);
     }
   }
@@ -290,7 +326,7 @@ export function reconcile(reportData, counterData, bcv) {
     }
   }
 
-  // Add NEN rows for types that have conteo but no OA sistema
+  // NEN rows for types with conteo but no OA sistema
   for (const type of PAYMENT_TYPES) {
     if (!nenTypesWithRows.has(type)) {
       const nc = type === 'Punto' ? null : nenConteoByType[type];
@@ -331,6 +367,7 @@ export function reconcile(reportData, counterData, bcv) {
     : 0;
 
   return {
+    favCajas,
     fav: favRows,
     nen: nenRows,
     totalFav,
@@ -339,8 +376,6 @@ export function reconcile(reportData, counterData, bcv) {
     roundingAdj,
     roundingPct,
     warning: roundingPct > 1,
-    puntoShortfallUsd: puntoShortfallUsd > 0 ? puntoShortfallUsd : 0,
-    puntoShortfallBs: puntoShortfallBs > 0 ? puntoShortfallBs : 0,
     cajasConteoByType: conteo,
   };
 }

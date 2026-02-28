@@ -78,9 +78,25 @@ function writeOrdenesSheet(wb, { reportData, date, storeCode, storeName, bcv, or
 
   const { fav, nen, totals } = reportData;
 
-  // FAV section
-  for (const m of fav.methods) {
-    writeMethodRow(ws, 'CAJA1', m);
+  // FAV section — dynamic per-caja grouping
+  const cajaNames = Object.keys(fav.cajas || {}).sort();
+  const multiCaja = cajaNames.length > 1;
+
+  if (multiCaja) {
+    // Multiple cajas: show per-caja sections with subtotals
+    for (const cajaName of cajaNames) {
+      const cajaData = fav.cajas[cajaName];
+      for (const m of cajaData.methods) {
+        writeMethodRow(ws, cajaName, m);
+      }
+      writeSectionTotal(ws, `Total ${cajaName}`, cajaData);
+    }
+  } else {
+    // Single caja (or legacy data without cajas): flat FAV section
+    const cajaLabel = cajaNames[0] || 'CAJA1';
+    for (const m of fav.methods) {
+      writeMethodRow(ws, cajaLabel, m);
+    }
   }
   // Total FAV
   writeSectionTotal(ws, 'Total FAV', fav);
@@ -422,9 +438,23 @@ function writeReconciliacionSheet(wb, { reconcileData, date, storeCode, storeNam
   // Freeze after row 3
   ws.views = [{ state: 'frozen', ySplit: 3 }];
 
-  // FAV section
-  for (const r of reconcileData.fav) {
-    writeReconcileRow(ws, 'FAV', r);
+  // FAV section — per-caja when multiple cajas
+  const cajaNames = Object.keys(reconcileData.favCajas || {}).sort();
+  const multiCaja = cajaNames.length > 1;
+
+  if (multiCaja) {
+    for (const cajaName of cajaNames) {
+      const cajaData = reconcileData.favCajas[cajaName];
+      for (const r of cajaData.rows) {
+        writeReconcileRow(ws, cajaName, r);
+      }
+      writeReconcileTotalRow(ws, `Total ${cajaName}`, cajaData.total);
+    }
+  } else {
+    const cajaLabel = cajaNames[0] || 'CAJA1';
+    for (const r of reconcileData.fav) {
+      writeReconcileRow(ws, cajaLabel, r);
+    }
   }
   // Total FAV
   writeReconcileTotalRow(ws, 'Total FAV', reconcileData.totalFav);
@@ -480,19 +510,42 @@ function writeReconciliacionSheet(wb, { reconcileData, date, storeCode, storeNam
   notes.push(`• Tasa BCV usada: ${bcv}`);
   notes.push('');
 
-  // Detail FAV adjustments
-  const favAdj = reconcileData.fav.filter(r => r.diffUsd !== 0);
-  if (favAdj.length > 0) {
-    notes.push('AJUSTES FAV:');
-    for (const r of favAdj) {
-      const sign = r.diffUsd > 0 ? '+' : '';
-      notes.push(`• ${r.metodo}: conteo ${sign}$${r.diffUsd.toFixed(2)} (Bs ${sign}${round2(r.conteoBs - r.sistemaBs).toFixed(2)}) vs sistema`);
-    }
-    if (reconcileData.puntoShortfallUsd > 0) {
-      notes.push(`  → Déficit Punto total: $${reconcileData.puntoShortfallUsd.toFixed(2)} (Bs ${reconcileData.puntoShortfallBs.toFixed(2)}) absorbido en Efectivo Bs Tienda FAV`);
+  // Detail FAV adjustments — per-caja when multiple cajas
+  if (multiCaja) {
+    for (const cajaName of cajaNames) {
+      const cajaData = reconcileData.favCajas[cajaName];
+      const cajaAdj = cajaData.rows.filter(r => r.diffUsd !== 0);
+      if (cajaAdj.length > 0 || cajaData.puntoShortfallUsd > 0) {
+        notes.push(`AJUSTES FAV ${cajaName}:`);
+        for (const r of cajaAdj) {
+          const sign = r.diffUsd > 0 ? '+' : '';
+          notes.push(`• ${r.metodo}: conteo ${sign}$${r.diffUsd.toFixed(2)} (Bs ${sign}${round2(r.conteoBs - r.sistemaBs).toFixed(2)}) vs sistema`);
+        }
+        if (cajaData.puntoShortfallUsd > 0) {
+          notes.push(`  → Déficit Punto ${cajaName}: $${cajaData.puntoShortfallUsd.toFixed(2)} (Bs ${cajaData.puntoShortfallBs.toFixed(2)}) absorbido en Efectivo Bs`);
+        }
+        notes.push(`• Total ${cajaName} Diferencia: $${cajaData.total.diffUsd.toFixed(2)}`);
+        notes.push('');
+      }
     }
     notes.push(`• Total FAV Diferencia: $${reconcileData.totalFav.diffUsd.toFixed(2)}`);
     notes.push('');
+  } else {
+    const favAdj = reconcileData.fav.filter(r => r.diffUsd !== 0);
+    if (favAdj.length > 0) {
+      notes.push('AJUSTES FAV:');
+      for (const r of favAdj) {
+        const sign = r.diffUsd > 0 ? '+' : '';
+        notes.push(`• ${r.metodo}: conteo ${sign}$${r.diffUsd.toFixed(2)} (Bs ${sign}${round2(r.conteoBs - r.sistemaBs).toFixed(2)}) vs sistema`);
+      }
+      const singleCajaName = cajaNames[0] || 'CAJA1';
+      const singleCajaData = reconcileData.favCajas?.[singleCajaName];
+      if (singleCajaData && singleCajaData.puntoShortfallUsd > 0) {
+        notes.push(`  → Déficit Punto: $${singleCajaData.puntoShortfallUsd.toFixed(2)} (Bs ${singleCajaData.puntoShortfallBs.toFixed(2)}) absorbido en Efectivo Bs Tienda FAV`);
+      }
+      notes.push(`• Total FAV Diferencia: $${reconcileData.totalFav.diffUsd.toFixed(2)}`);
+      notes.push('');
+    }
   }
 
   // Detail NEN adjustments

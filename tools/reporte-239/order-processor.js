@@ -32,12 +32,15 @@ export function decomposePayments(orders, bcv) {
   for (const o of orders) {
     if (o.doc === 'BC') continue;
 
+    const caja = o.caja || 'CAJA1';
+
     // Punto
     if (o.pagoPuntoUsd > 0 || o.pagoPuntoBs > 0) {
       const name = o.punto ? titleCase(o.punto) : 'Sin nombre';
       lines.push({
         orden: o.orden,
         doc: o.doc,
+        caja,
         metodo: name,
         bs: round2(o.pagoPuntoBs || 0),
         usd: round2(o.pagoPuntoUsd || 0),
@@ -50,6 +53,7 @@ export function decomposePayments(orders, bcv) {
       lines.push({
         orden: o.orden,
         doc: o.doc,
+        caja,
         metodo: 'Pago Movil Tienda Venezuela 5187',
         bs: round2(o.pagoMovilBs || 0),
         usd: round2(o.pagoMovilUsd || 0),
@@ -63,6 +67,7 @@ export function decomposePayments(orders, bcv) {
       lines.push({
         orden: o.orden,
         doc: o.doc,
+        caja,
         metodo: 'Efectivo $ Tienda',
         bs: round2(cashNet * bcv),
         usd: cashNet,
@@ -76,6 +81,7 @@ export function decomposePayments(orders, bcv) {
       lines.push({
         orden: o.orden,
         doc: o.doc,
+        caja,
         metodo: 'Efectivo Bs Tienda',
         bs: round2(efBsNet),
         usd: round2(efBsNet / bcv),
@@ -88,6 +94,7 @@ export function decomposePayments(orders, bcv) {
       lines.push({
         orden: o.orden,
         doc: o.doc,
+        caja,
         metodo: 'Zelle',
         bs: round2(o.zelle * bcv),
         usd: round2(o.zelle),
@@ -106,10 +113,15 @@ export function aggregate(lines) {
   const map = new Map();
 
   for (const l of lines) {
-    const key = `${l.doc}||${l.metodo}`;
+    // FAV: group by (doc, caja, metodo) for per-caja sections
+    // NEN: group by (doc, metodo) — consolidated across cajas
+    const key = l.doc === 'FAV'
+      ? `${l.doc}||${l.caja || 'CAJA1'}||${l.metodo}`
+      : `${l.doc}||${l.metodo}`;
     if (!map.has(key)) {
       map.set(key, {
         doc: l.doc,
+        caja: l.doc === 'FAV' ? (l.caja || 'CAJA1') : undefined,
         metodo: l.metodo,
         bs: 0,
         usd: 0,
@@ -157,8 +169,11 @@ function getMethodIndex(metodo) {
 export function calculateTotals(aggregated, storeCode, bcv) {
   const igtfAgent = isIGTFAgent(storeCode);
 
-  const fav = { methods: [], bs: 0, usd: 0, netosiniva: 0, iva: 0, igtf: 0 };
+  const fav = { methods: [], cajas: {}, bs: 0, usd: 0, netosiniva: 0, iva: 0, igtf: 0 };
   const nen = { methods: [], bs: 0, usd: 0, netosiniva: 0, iva: 0, igtf: 0 };
+
+  // Accumulator for merged FAV methods (one entry per metodo, across all cajas)
+  const favMerged = new Map();
 
   for (const entry of aggregated) {
     const dollar = isDollarMethod(entry.metodo);
@@ -179,17 +194,55 @@ export function calculateTotals(aggregated, storeCode, bcv) {
       isDollar: dollar,
     };
 
-    const section = entry.doc === 'FAV' ? fav : nen;
-    section.methods.push(row);
-    section.bs = round2(section.bs + entry.bs);
-    section.usd = round2(section.usd + entry.usd);
-    section.netosiniva = round2(section.netosiniva + netosiniva);
-    section.iva = round2(section.iva + iva);
-    section.igtf = round2(section.igtf + igtf);
+    if (entry.doc === 'FAV') {
+      fav.bs = round2(fav.bs + entry.bs);
+      fav.usd = round2(fav.usd + entry.usd);
+      fav.netosiniva = round2(fav.netosiniva + netosiniva);
+      fav.iva = round2(fav.iva + iva);
+      fav.igtf = round2(fav.igtf + igtf);
+
+      // Merge by metodo for reconciler (combines cajas)
+      if (!favMerged.has(entry.metodo)) {
+        favMerged.set(entry.metodo, { metodo: entry.metodo, bs: 0, usd: 0, qty: 0, netosiniva: 0, iva: 0, igtf: 0, isDollar: dollar });
+      }
+      const merged = favMerged.get(entry.metodo);
+      merged.bs = round2(merged.bs + entry.bs);
+      merged.usd = round2(merged.usd + entry.usd);
+      merged.qty += entry.qty;
+      merged.netosiniva = round2(merged.netosiniva + netosiniva);
+      merged.iva = round2(merged.iva + iva);
+      merged.igtf = round2(merged.igtf + igtf);
+
+      // Per-caja grouping for Excel
+      const cajaName = entry.caja || 'CAJA1';
+      if (!fav.cajas[cajaName]) {
+        fav.cajas[cajaName] = { methods: [], bs: 0, usd: 0, netosiniva: 0, iva: 0, igtf: 0 };
+      }
+      const cajaSection = fav.cajas[cajaName];
+      cajaSection.methods.push(row);
+      cajaSection.bs = round2(cajaSection.bs + entry.bs);
+      cajaSection.usd = round2(cajaSection.usd + entry.usd);
+      cajaSection.netosiniva = round2(cajaSection.netosiniva + netosiniva);
+      cajaSection.iva = round2(cajaSection.iva + iva);
+      cajaSection.igtf = round2(cajaSection.igtf + igtf);
+    } else {
+      nen.methods.push(row);
+      nen.bs = round2(nen.bs + entry.bs);
+      nen.usd = round2(nen.usd + entry.usd);
+      nen.netosiniva = round2(nen.netosiniva + netosiniva);
+      nen.iva = round2(nen.iva + iva);
+      nen.igtf = round2(nen.igtf + igtf);
+    }
   }
 
-  fav.methods = sortMethods(fav.methods);
+  // fav.methods = merged across cajas (one entry per metodo) — used by reconciler
+  fav.methods = sortMethods(Array.from(favMerged.values()));
   nen.methods = sortMethods(nen.methods);
+
+  // Sort methods within each caja
+  for (const cajaSection of Object.values(fav.cajas)) {
+    cajaSection.methods = sortMethods(cajaSection.methods);
+  }
 
   const totals = {
     bs: round2(fav.bs + nen.bs),

@@ -72,7 +72,9 @@ Example user requests and which tool to call:
 
 ### Sheet 1: Ordenes Activas
 - 8 columns: CODCAJA, METODO_PAGO, Suma NETOCIVA Bs, Suma NETOCIVAUSD, Qty, NETOSINIVA, IVA, IGTF (3%)
-- Sections: FAV (CAJA1) → Total FAV | NEN → Total NEN | TOTAL (FAV+NEN)
+- Sections: FAV per-caja (CAJA1 → Total CAJA1 | CAJA2 → Total CAJA2) → Total FAV | NEN → Total NEN | TOTAL (FAV+NEN)
+- Multi-caja: dynamic per-caja sections with subtotals (only cajas that exist are shown)
+- Single-caja: flat section with CAJA1 label (no subtotal before Total FAV)
 - Dollar methods styled blue italic; IGTF shows "-" when not applicable
 - Red background (#FF0000) on total rows
 
@@ -82,10 +84,22 @@ Example user requests and which tool to call:
 - Yellow total row, separate "Detalle de Lotes" section with blue headers
 
 ### Sheet 3: Reconciliación
-- 6 columns: Forma de Pago, Ordenes Activas USD, Cajas (Sistema) USD, Diferencia USD, Diferencia %, Status
-- Green data rows, yellow total row, NOTAS section at bottom
+- 7 columns: CODCAJA, Forma de Pago, Sistema Bs, Sistema USD, Conteo Bs, Conteo USD, Diferencia USD
+- FAV per-caja sections with subtotals (same structure as Sheet 1), NEN consolidated
+- Green data rows, red total rows, yellow grand total row
+- NOTAS section: reconciliation rules, per-caja FAV adjustments (Punto shortfall → Efectivo Bs), NEN adjustments, rounding, verification checks
 
 ## Run
 ```bash
 node server.js
 ```
+
+## Testing with Latest Code
+
+The MCP server caches Node.js modules at startup. After code changes, the MCP tools still run old code until the server restarts. To test with the latest code without restarting, use the standalone test script:
+
+```bash
+node /tmp/test-reconcile-caja.mjs
+```
+
+This generates Excel reports directly to `~/Downloads` for FQ88 and FQ01 (2026-02-25), bypassing the MCP server cache. Update the `DATE` and store codes in the script as needed.
